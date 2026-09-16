@@ -204,10 +204,37 @@ describe('RunResult classification', () => {
     assert.strictEqual(result.json, true);
   });
 
-  test('exit 1 with a healthy JSON-looking stdout still classifies as an error (exit code outranks payload)', () => {
-    const raw = { exitCode: 1, stdout: JSON.stringify({ ok: true, total_plans: 5 }), stderr: '', argv: ['progress'] };
+  // #4686 (ADR-3889 §1): exit 1 with a JSON-object stdout and no stderr
+  // envelope is a declared FAIL verdict, not an invocation error — the matrix
+  // rule "exit code outranks payload" narrowed to "a stderr envelope outranks
+  // an incidental payload": an explicit error still wins, but a verdict
+  // payload with nothing contradicting it must surface as VERDICT_FAIL with
+  // `json` populated, or scenario expectations could never assert on it.
+  test('exit 1 with a JSON-object stdout and no envelope classifies as VERDICT_FAIL carrying the payload (#4686)', () => {
+    const raw = { exitCode: 1, stdout: JSON.stringify({ passed: false, blockers: ['x'] }), stderr: '', argv: ['phase', 'uat-passed', '1'] };
     const result = classify(raw);
-    assert.notStrictEqual(result.kind, KIND.JSON);
+    assert.strictEqual(result.kind, KIND.VERDICT_FAIL);
+    assert.deepStrictEqual(result.json, { passed: false, blockers: ['x'] });
+  });
+
+  test('exit 1 with a stderr envelope still classifies as STRUCTURED_ERROR even when stdout carries a JSON object', () => {
+    const stderr = JSON.stringify({ ok: false, reason: 'bad-config', message: 'config invalid' });
+    const raw = { exitCode: 1, stdout: JSON.stringify({ ok: true, total_plans: 5 }), stderr, argv: ['review-lane'] };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.STRUCTURED_ERROR);
+    assert.strictEqual(result.err.reason, 'bad-config');
+  });
+
+  test('exit 1 with an {error:...} object stdout still classifies as UNSTRUCTURED_ERROR (soft-failure idiom, not a verdict)', () => {
+    const raw = { exitCode: 1, stdout: JSON.stringify({ error: 'File not found' }), stderr: '', argv: ['x'] };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
+    assert.strictEqual(result.json, null, 'an {error:...} payload is the soft-failure idiom, not a verdict');
+  });
+
+  test('exit 1 with a scalar JSON stdout still classifies as UNSTRUCTURED_ERROR (verdict payloads are objects)', () => {
+    const raw = { exitCode: 1, stdout: '5', stderr: '', argv: ['x'] };
+    const result = classify(raw);
     assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
   });
 
