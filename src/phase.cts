@@ -22,9 +22,6 @@ import { execFileSync } from 'node:child_process';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import ioMod = require('./io.cjs');
 const { output, error, ERROR_REASON, formatDiagnosticToken } = ioMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- cli-exit.cjs is an export= CommonJS module
-import cliExitMod = require('./cli-exit.cjs');
-const { setPendingOutcome } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
@@ -4712,11 +4709,12 @@ function cmdPhaseUatPassed(
   const report = evaluateUatPassed(phaseFullDir, { policy: opts.policy });
 
   output({ phase: phaseNum, ...report }, raw);
-  // #4686 (ADR-3889 §1): the verdict must also reach the exit code — the 0/1
-  // band is unversioned. Declared AFTER the final output() call: output()
-  // clears the pending-outcome cell on a clean payload (last-write-wins,
-  // io.cjs), so a declaration placed before it would never survive to runMain.
-  setPendingOutcome(report.passed ? 'PASS' : 'FAIL');
+  // #4686 (ADR-3889 §1): a negative verdict must exit 1 — the 0/1 band is
+  // unversioned. Set directly per json-errors.md precedence rule 2 (the
+  // `state validate --strict` pattern, src/state.cts): this verdict payload
+  // is clean, so no declaration pending from output() can compete with or
+  // lower it, and runMain's projection may only set a code, never lower one.
+  if (!report.passed) process.exitCode = 1;
 }
 
 // #1437 — phase.list-plans: list plan files for a given phase number.

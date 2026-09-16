@@ -217,6 +217,38 @@ describe('RunResult classification', () => {
     assert.deepStrictEqual(result.json, { passed: false, blockers: ['x'] });
   });
 
+  // The substrate a verdict step actually runs through: loop-walk's run()
+  // synthesizes a single `Command failed: …` stderr line on a non-zero exit
+  // (the child's own stderr was empty). That lone line is not a warning and
+  // not an envelope, so the verdict shape must survive it.
+  test('exit 1 with a single synthesized stderr line still classifies as VERDICT_FAIL (#4686)', () => {
+    const raw = {
+      exitCode: 1,
+      stdout: JSON.stringify({ all_passed: false }),
+      stderr: 'Command failed: node gsd-tools.cjs verify artifacts p.md [stderr: (empty) exit:1]',
+      argv: ['verify', 'artifacts', 'p.md'],
+    };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.VERDICT_FAIL);
+    assert.deepStrictEqual(result.json, { all_passed: false });
+  });
+
+  // Adversarial: a real crash dumps multi-line diagnostics (a stack trace) to
+  // stderr. Even if stdout happens to hold a JSON object printed before the
+  // crash, that is an error wearing a payload, not a verdict — it must stay
+  // UNSTRUCTURED_ERROR so the oracle violation fires.
+  test('exit 1 with multi-line stderr diagnostics is NOT washed into VERDICT_FAIL by a JSON-object stdout (#4686)', () => {
+    const raw = {
+      exitCode: 1,
+      stdout: JSON.stringify({ total_plans: 5 }),
+      stderr: ['Error: EACCES: permission denied, open \'/etc/shadow\'', '    at readFileSync (node:fs:455:20)', '    at cmdX (verify.cjs:100:5)'].join('\n'),
+      argv: ['x'],
+    };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
+    assert.strictEqual(result.json, null, 'a crash must not surface a verdict payload');
+  });
+
   test('exit 1 with a stderr envelope still classifies as STRUCTURED_ERROR even when stdout carries a JSON object', () => {
     const stderr = JSON.stringify({ ok: false, reason: 'bad-config', message: 'config invalid' });
     const raw = { exitCode: 1, stdout: JSON.stringify({ ok: true, total_plans: 5 }), stderr, argv: ['review-lane'] };
